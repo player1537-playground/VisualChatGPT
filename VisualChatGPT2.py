@@ -21,9 +21,14 @@ import _jsonnet
 
 
 ROOT = Path(__file__).resolve().parent
+URL = 'https://api.openai.com/v1/chat/completions'
 MODEL = 'gpt-3.5-turbo'
 OPENAI_API_KEY = (Path.home() / '.openai_api_key').read_text().strip()
 PRICING = 0.002 / 1000  # dollars/token
+
+
+def run(func):
+    return func()
 
 
 def _configure_text_defaults(text: Text):
@@ -101,35 +106,6 @@ class Request:
 
 
 @dataclass
-class Editor:
-    value: str
-
-    @classmethod
-    def from_path(cls, path: Path) -> Code:
-        path = Path(path)
-        return cls(
-            value=path.read_text(),
-        )
-
-    def tk(self, master: Widget) -> Widget:
-        var = StringVar()
-        var.set(self.value)
-        def callback(name, index, mode):
-            self.value = var.get()
-        var.trace('w', callback)
-
-        text = ScrolledText(master)
-        _configure_text_defaults(text)
-        text.insert(END, var.get())
-        def callback(event):
-            var.set(text.get('1.0', END))
-            text.edit_modified(0)
-        text.bind('<<Modified>>', callback)
-
-        return text
-
-
-@dataclass
 class Requests:
     requests: List[Request]
     
@@ -201,25 +177,12 @@ class Responses:
 
     def tk(self, master: Widget) -> Widget:
         frame = Frame(master)
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
 
-        editor = Editor(value=json.dumps({
-            'responses': [
-                {
-                    'message': {
-                        'content': response.message.content,
-                    },
-                }
-                for response in self.responses
-            ],
-        })).tk(frame)
-        editor.grid(row=0, column=0, sticky='nsew')
-
-        for i, response in enumerate(self.responses, start=1):
+        for i, response in enumerate(self.responses):
             response = response.tk(frame)
-            response.grid(row=i, column=0, sticky='nsew')
-            frame.grid_rowconfigure(i, weight=2)
+            response.grid(row=i, column=0, stick='nsew')
+            frame.grid_rowconfigure(i, weight=1)
+            frame.grid_columnconfigure(0, weight=1)
 
         return frame
 
@@ -285,30 +248,25 @@ class Code:
         return text
 
 
-@dataclass
-class Document:
-    name: str
-    text: str
+class Editor(Frame):
+    def __init__(self, master: Widget, *, value=None):
+        super().__init__(master)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
-    @classmethod
-    def from_path(cls, path: Path) -> Document:
-        path = Path(path)
-        return cls(
-            name=str(path),
-            text=path.read_text(),
-        )
+        self._value = \
+        value = value or ''
 
-    def report(self):
-        print(f'Document(name={self.name!r}, len(text)={len(self.text)!r})')
-
-    def tk(self, master: Widget) -> Widget:
+        self._var = \
         var = StringVar()
-        var.set(self.text)
+        var.set(self.value)
         def callback(name, index, mode):
-            self.text = var.get()
+            self._value = var.get()
         var.trace('w', callback)
 
-        text = ScrolledText(master)
+        self._text = \
+        text = ScrolledText(self)
+        text.grid(0, 0, sticky='nsew')
         _configure_text_defaults(text)
         text.insert(END, var.get())
         def callback(event):
@@ -316,7 +274,45 @@ class Document:
             text.edit_modified(0)
         text.bind('<<Modified>>', callback)
 
-        return text
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._var.set(value)
+
+
+class Editors(Frame):
+    def __init__(self, master: Widget, *, value=None):
+        if value is None:
+            value = []
+
+        super().__init__(master)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self._notebook = \
+        notebook = Notebook(self)
+        notebook.grid(row=0, column=0, sticky='nsew')
+
+        self._notebook_editors = []
+
+        self.value = value
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        for _ in self._notebook_editors:
+            self._notebook.forget(0)
+
+        self._notebook_editors = [None] * len(value)
+
+        self._value = value
+
 
 
 class TextRedirector(object):
@@ -336,13 +332,22 @@ class TextRedirector(object):
         self.fileobj.flush()
 
 
+TEXT = NewType('TEXT', str)
+CODE = NewType('CODE', str)
+
+
 @dataclass
 class Application:
-    url: str
-    document: Document
-    code: Code
-    requests: Requests
-    responses: Responses
+    input: TEXT
+    preprocess: CODE
+    inputs: List[TEXT]
+    encoder: CODE
+    requests: List[Request]
+    responses: List[Response]
+    decoder: CODE
+    outputs: List[TEXT]
+    postprocess: CODE
+    output: TEXT
 
     def compile(self):
         data = json.loads(_jsonnet.evaluate_snippet(
@@ -400,113 +405,14 @@ class Application:
 
     def tk(self, master: Widget) -> Widget:
         menu = Menu(master)
-        def callback():
-            nonlocal document
-            
-            if document is not None:
-                notebook.forget(document)
-                document = None
-            
-            try:
-                path = askopenfilename(
-                    initialdir=str(Path.home() / 'Documents'),
-                    filetypes=[
-                        ('Text', '*.txt'),
-                    ],
-                )
-                path = Path(path)
-                
-                name = path.name
-                text = path.read_text()
-                
-                self.document.name = name
-                self.document.text = text
-                
-                self.document.report()
-            finally:
-                document = self.document.tk(notebook)
-                notebook.insert(0, document, text='1 Document', underline=0)
-                notebook.select(0)
-        menu.add_command(label='Open Document', command=callback)
-        def callback():
-            nonlocal code
-
-            old_code = code
-            
-            try:
-                path = askopenfilename(
-                    initialdir=str(ROOT / 'templates'),
-                    filetypes=[
-                        ('Jsonnet', '*.jsonnet'),
-                    ],
-                )
-                path = Path(path)
-                
-                name = path.name
-                text = path.read_text()
-                print(f'Code: {name = !r}; {len(text) = !r}')
-                
-                self.code.name = name
-                self.code.source = text
-            finally:
-                code = self.code.tk(notebook)
-                notebook.insert(1, code, text='2 Code', underline=0)
-                notebook.select(1)
-                
-                if old_code is not None:
-                    notebook.forget(old_code)
-        menu.add_command(label='Open Code', command=callback)
-        def callback():
-            nonlocal requests, responses
-
-            if requests is not None:
-                notebook.forget(requests)
-                requests = None
-
-            if responses is not None:
-                notebook.forget(responses)
-                responses = None
-
-            try:
-                self.compile()
-            finally:
-                requests = self.requests.tk(notebook)
-                notebook.add(requests, text='3 Requests', underline=0)
-                notebook.select(2)
-        menu.add_command(label='Compile Code', command=callback)
-        def callback():
-            nonlocal responses
-            if responses is not None:
-                notebook.forget(responses)
-                responses = None
-
-            try:
-                self.execute()
-            finally:
-                responses = self.responses.tk(notebook)
-                notebook.add(responses, text='4 Responses', underline=0)
-                notebook.select(3)
-        menu.add_command(label='Execute Requests', command=callback)
         master.config(menu=menu)
-        
-        frame = Frame(master)
-        frame.grid(row=0, column=0, sticky='nsew')
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=0)
-        frame.grid_columnconfigure(0, weight=1)
 
-        text = ScrolledText(frame, height=8)
-        _configure_text_defaults(text)
-        text.tag_configure('stderr', foreground='#b22222')
-        text.grid(row=1, column=0, sticky='sew')
-        
-        sys.stdout = TextRedirector(sys.stdout, text, 'stdout')
-        sys.stderr = TextRedirector(sys.stderr, text, 'stderr')
-
-        notebook = Notebook(frame)
+        notebook = Notebook(master)
         notebook.grid(row=0, column=0, stick='nsew')
         notebook.grid_rowconfigure(0, weight=1)
         notebook.grid_columnconfigure(0, weight=1)
+
+        
 
         document = self.document.tk(notebook)
         notebook.add(document, text=f'1 Document', underline=0)
@@ -523,32 +429,104 @@ class Application:
         return frame
 
 
-def main(name: str, url: str, document: Path, code: Path, icon: Path):
-    tk = Tk()
-    tk.geometry('640x480')
-    tk.attributes('-zoomed', True)
-    tk.title(name)
-    tk.grid_rowconfigure(0, weight=1)
-    tk.grid_columnconfigure(0, weight=1)
-
+def main(
+    title: str,
+    url: str,
+    input: TEXT,
+    preprocess: CODE,
+    inputs: List[TEXT],
+    encoder: CODE,
+    requests: List[Request],
+    responses: List[Response],
+    decoder: CODE,
+    outputs: List[TEXT],
+    postprocess: CODE,
+    output: TEXT,
+    icon: Path,
+):
+    icon = icon
     icon = Image.open(icon)
     icon = PhotoImage(icon)
-    tk.wm_iconphoto(True, icon)
 
+    tk = Tk()
+    tk.title(name)
+    tk.geometry('640x480')
+    tk.wm_iconphoto(True, tk_icon)
+    tk.attributes('-zoomed', True)
+    tk.grid_rowconfigure(0, weight=1)
+    tk.grid_rowconfigure(1, weight=0)
+    tk.grid_columnconfigure(0, weight=1)
+
+    tk_style = \
     style = Style(tk)
     style.configure('stacked.TNotebook', tabposition='nw', tabplacement='nw')
 
-    application = Application(
-        url=url,
-        document=Document.from_path(document),
-        code=Code.from_path(code),
-        requests=Requests(
-            requests=[],
-        ),
-        responses=Responses(
-            responses=[],
-        ),
-    ).tk(tk)
+    tk_main = \
+    frame = Frame(tk)
+    frame.grid(row=0, column=0, sticky='nsew')
+    frame.grid_rowconfigure(0, weight=1)
+    frame.grid_columnconfigure(0, weight=1)
+
+    tk_main_notebook = \
+    notebook = Notebook(tk_main)
+    notebook.grid(row=0, column=0, sticky='nsew')
+    notebook.grid_rowconfigure(0, weight=1)
+    notebook.grid_columnconfigure(0, weight=1)
+
+    tk_main_input = \
+    editor = Editor(tk_main_notebook, value=input)
+    editor.grid(row=0, column=0, sticky='nsew')
+    tk_main_notebook.insert(0, editor, text='1 Input', underline=0)
+
+    tk_main_preprocess = \
+    editor = Editor(tk_main_notebook, value=input)
+    editor.grid(row=0, column=0, sticky='nsew')
+    tk_main_notebook.insert(1, editor, text='2 Preprocess', underline=0)
+
+    tk_main_inputs = None
+    def _tk_main_inputs():
+        nonlocal tk_main_inputs
+
+        if tk_main_inputs is not None:
+            tk_main_notebook.forget(tk_main_inputs)
+
+        tk_main_inputs = \
+        notebook = Notebook(tk_main_notebook)
+        notebook.grid(row=0, column=0, sticky='nsew')
+        notebook.grid_rowconfigure(0, weight=1)
+        notebook.grid_columnconfigure(0, weight=1)
+        tk_main_notebook.insert(2, notebook, text='3 Inputs', underline=0)
+
+        for input in inputs:
+            tk_main_inputs_editor = \
+            editor = Editor(tk_main_inputs, value=input)
+    _tk_main_inputs()
+
+    
+
+    #/tk_main_inputs
+
+
+    #/tk_main_notebook
+
+    #/tk_main
+
+
+    tk_footer = \
+    frame = Frame(tk)
+    frame.grid(row=1, column=0, sticky='sew')
+    frame.grid_rowconfigure(0, weight=1)
+    frame.grid_columnconfigure(0, weight=1)
+
+    tk_footer_text = \
+    text = ScrolledText(tk_footer, height=8)
+    _configure_text_defaults(text)
+    text.tag_configure('stderr', foreground='#b22222')
+    text.grid(row=0, column=0, sticky='nsew')
+    sys.stdout = TextRedirector(sys.stdout, text, 'stdout')
+    sys.stderr = TextRedirector(sys.stderr, text, 'stderr')
+
+    #/tk_footer
 
     tk.mainloop()
 
@@ -565,8 +543,7 @@ def cli():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', default='VisualChatGPT', type=lambda s: f'VisualChatGPT - {s}')
-    parser.add_argument('--url', default='https://api.openai.com/v1/chat/completions')
+    parser.add_argument('--title', default='VisualChatGPT', type=lambda s: f'VisualChatGPT - {s}')
     parser.add_argument('--document', type=Path, default=Path('/dev/null'))
     parser.add_argument('--code', type=Path, default=Path('/dev/null'))
     parser.add_argument('--icon', type=icon, default=icon('C'))
