@@ -1,0 +1,59 @@
+local llm = {
+  input::
+    std.extVar('input'),
+  
+  _fetch::
+    std.native('fetch'),
+
+  fetch(request)::
+    self._fetch(std.manifestJsonMinified(request)),
+};
+
+{
+  Character: "You are a helpful AI assistant that helps a PhD student write their dissertation",
+  Job: "Your job is to take a long line of text and split it across multiple lines according to several restrictions",
+  R: "You must act according to these restrictions: %(R1)s, %(R2)s, and %(R3)s." % self,
+  R1: "R1) You must not modify the content of the text. Only add newlines where appropriate",
+  R2: "R2) Each line of generated text should be considered a standalone thought or standalone phrase",
+  R3: "R3) Each line of generated text should be short, with no more than 10 words per line",
+  E: "Here is some text that follows these restrictions. Your generated text should mimic the style of this text: %(E1)s" % self,
+  E1: |||
+    Some tasks are natural fits for VaaS.
+    Characteristics of these tasks include:
+    task-parallel;
+    an independence between users, devices, and services;
+    and centered on pre-determined visualizations.
+  |||,
+  Input:: llm.input,
+  
+  requests::
+    local requests = [
+      { messages: [
+        { role: 'system', content: |||
+          %(Character)s. %(Job)s. %(R)s. %(E)s.
+        ||| % $ },
+        { role: 'user', content: |||
+          I will now provide you with the text you will split.
+          
+          %(Input)s
+        ||| % $ },
+      ] },
+    ];
+    assert std.assertEqual(std.length(requests), 1);
+    requests,
+  
+  responses::
+    local requests = self.requests;
+    local responses = [
+      std.native('fetch')(std.manifestJsonMinified(request))
+      for request in self.requests
+    ];
+    assert std.assertEqual(std.length(responses), 1);
+    responses,
+  
+  output::
+    local responses = self.responses;
+    local output =
+      responses[0].choices[0].message.content;
+    output,
+}.output

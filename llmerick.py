@@ -42,25 +42,7 @@ class Application:
     reader: TextIO
     writer: TextIO
 
-    preprocess_enable: bool
-    preprocess_file: TextIO
-
-    encode_enable: bool
-    encode_file: TextIO
-
-    execute_enable: bool
-    execute_file: TextIO
-
-    execute_enable: bool
-    execute_file: TextIO
-
-    decode_enable: bool
-    decode_file: TextIO
-
-    postprocess_enable: bool
-    postprocess_file: TextIO
-
-    context: json
+    code: Code
 
 
     #--- Utilities
@@ -156,31 +138,6 @@ class Application:
             ret.append(match)
         return ret
 
-
-    #--- Functional
-
-    def preprocess(self, context, code: Code) -> List[Text]:
-        assert self.preprocess_enable
-        print(f'{code = !r}')
-        return self._jsonnet(context, code.name, code.read())
-
-    def encode(self, context, code: Code) -> List[Request]:
-        assert self.encode_enable
-        return self._jsonnet(context, code.name, code.read())
-
-    def execute(self, context, code: Code) -> List[Response]:
-        assert self.execute_enable
-        return self._jsonnet(context, code.name, code.read())
-
-    def decode(self, context, code: Code) -> List[Text]:
-        assert self.decode_enable
-        return self._jsonnet(context, code.name, code.read())
-
-    def postprocess(self, context, code: Code) -> Text:
-        assert self.postprocess_enable
-        return self._jsonnet(context, code.name, code.read())
-
-
     #--- Main
 
     def __call__(self):
@@ -191,24 +148,11 @@ class Application:
         except json.JSONDecodeError:
             context = { 'input': context }
 
-        if self.preprocess_enable:
-            context |= self.preprocess(context, self.preprocess_file)
-        
-        if self.encode_enable:
-            context |= self.encode(context, self.encode_file)
-
-        if self.execute_enable:
-            context |= self.execute(context, self.execute_file)
-
-        if self.decode_enable:
-            context |= self.decode(context, self.decode_file)
-
-        if self.postprocess_enable:
-            context |= self.postprocess(context, self.postprocess_file)
+        context = self._jsonnet(context, self.code.name, self.code.read())
 
         try:
             context = context['output']
-        except KeyError:
+        except (KeyError, TypeError):
             if self.pretty:
                 context = pprint.pformat(context, width=120, compact=True, sort_dicts=False)
             else:
@@ -231,51 +175,13 @@ def cli():
     parser.add_argument('--input', '-i', dest='reader', type=argparse.FileType('rt'), default=sys.stdin)
     parser.add_argument('--output', '-o', dest='writer', type=argparse.FileType('wt'), default=sys.stdout)
     def add_code_argument(parser, *, flag, dest):
-        if dest != 'combined':
-            parser.add_argument(f'{flag}', dest=f'{dest}_enable', action='store_true')
-        parser.add_argument(f'{flag}-code', dest=f'{dest}_file', type=lambda s: fakefile(s, f"<{flag}>"))
-        parser.add_argument(f'{flag}-file', dest=f'{dest}_file', type=argparse.FileType('rt'))
-    add_code_argument(parser, flag='--combined', dest='combined')
-    add_code_argument(parser, flag='--preprocess', dest='preprocess')
-    add_code_argument(parser, flag='--encode', dest='encode')
-    add_code_argument(parser, flag='--execute', dest='execute')
-    add_code_argument(parser, flag='--decode', dest='decode')
-    add_code_argument(parser, flag='--postprocess', dest='postprocess')
+        parser.add_argument(f'{flag}', dest=f'{dest}', type=argparse.FileType('rt'))
+        parser.add_argument(f'{flag}-str', dest=f'{dest}', type=lambda s: fakefile(s, f"<{flag}>"))
+    add_code_argument(parser, flag='--code', dest='code')
     parser.add_argument('--pretty', action='store_true')
     args = vars(parser.parse_args())
 
-    combined_file = args.pop('combined_file')
-    if combined_file is not None:
-        sections = ['preprocess', 'encode', 'execute', 'decode', 'postprocess']
-
-        combined_parts = {}
-        combined_parts[section := None] = []
-
-        for line in combined_file:
-            line = line.removesuffix("\n")
-            if line.startswith('##'):
-                section = line[len('##'):]
-                section = section.strip()
-                if section not in sections:
-                    raise ValueError(f'Section {section!r} not recognized: {line}')
-                combined_parts[section] = []
-                continue
-
-            combined_parts[section].append(line)
-
-        for section in sections:
-            if section not in combined_parts:
-                continue
-
-            if args[f'{section}_file'] is not None:
-                continue
-
-            args[f'{section}_file'] = fakefile("\n".join(sum([
-                combined_parts[None],
-                combined_parts[section],
-            ], [])), f"<##{section}>")
-
-    app = Application(**args, context={})
+    app = Application(**args)
     app()
 
 

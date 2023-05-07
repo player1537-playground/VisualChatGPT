@@ -1,0 +1,190 @@
+local re_find_all(pat, str) =
+  local native = std.native('re_find_all');
+  native(pat, str);
+
+local grouper(n, arr) =
+  local each(i) =
+    local each(j) =
+      arr[i+j];
+    std.makeArray(n, each);
+  std.makeArray(std.length(arr) - n, each);
+
+local zipWithIndex(func, arr1, arr2) =
+  local len1 = std.length(arr1);
+  local len2 = std.length(arr2);
+  assert std.assertEqual(len1, len2);
+  local each(i) = func(i, arr1[i], arr2[i]);
+  std.makeArray(len1, each);
+  
+local zip(func, arr1, arr2) =
+  local each(i, x, y) =
+    func(x, y);
+  zipWithIndex(each, arr1, arr2);
+
+local groupBy(keyfunc, arr) =
+  local each(acc, x) =
+    local key = keyfunc(x);
+    local value = [x];
+    acc + { [key] +: value };
+  std.foldl(each, arr, {});
+
+local comment(s) =
+  local each(line) = "%" + line;
+  std.join("\n", std.map(each, std.split(s, "\n")));
+
+local makeObject(entries) = {
+  [entry.key]: entry.value
+  for entry in entries
+};
+
+local makeGoals(text) = {
+  text: text,
+  parts: makeObject([
+    local parts = std.splitLimit(line, ") ", 1);
+    local key = parts[0];
+    local value = line;
+    { key: key, value: value }
+    for line in std.split(text, "\n")
+    if line != ""
+  ]),
+};
+  
+local goals = makeGoals(|||
+  1) There is a gap between computational needs and access.
+  2) Scalability of monolithic services is a key problem.
+  3) VaaS has been shown to be effective.
+  4) VaaS is not a solved problem.
+  5) VaaS is known to be good at task-parallel problems, but what about data-parallel problems?
+  6) VaaS is known to be good at single-device-per-user problems, but what about multiple-devices-per-user problems?
+  7) VaaS is known to be good at result-oriented visualization, but what about hypothesis-oriented visualization?
+  8) In this dissertation, I study these 3 improvements on VaaS capabilities.
+|||);
+
+##preprocess
+
+{ inputs: [
+  std.join("\n", [
+    line
+    for line in std.split(paragraph, "\n")
+#     if !std.startsWith(line, "#")
+#     if !std.startsWith(line, "\\")
+#     if !std.startsWith(line, "}")
+  ])
+  for paragraph in std.split(std.extVar('input'), "\n\n")
+] }
+
+##encode
+
+local context = {
+  character: "You are a helpful assistant designed to aid a PhD student with writing their dissertation",
+  job: |||
+    Your job is to rate a snippet of text from my dissertation according to how well it adheres to a set of goals. Your ratings should be a simple number out of 10 (best: "10/10", worst: "0/10"). Your job is limited: you only make ratings from a specific snippet of text, and you only make a rating for a specific goal
+  ||| % self,
+  task: "You will be given: %(A)s, %(B)s, %(C)s, %(D)s, and %(E)s. You will produce: %(F)s and %(G)s" % self,
+  A: "A) The set of all goals",
+  B: "B) The previous snippet of text",
+  C: "C) The current snippet of text",
+  D: "D) The next snippet of text",
+  E: "E) The current goal",
+  F: "F) An explanation of how well (%(B)s adheres to (%(E)s" % self,
+  G: |||
+    G) A simple rating of how well (%(B)s adheres to (%(E)s out of 10 (best: "10/10", worst: "0/10")
+  ||| % self,
+} + {
+  a: goals.text,
+};
+
+local _ = context; local context = {
+  [entry.key]: std.stripChars(entry.value, " \t\n")
+  for entry in std.objectKeysValues(_)
+};
+
+{ requests: [
+  local _ = context; local context = _ + {
+    b: group[0],
+    c: group[1],
+    d: group[2],
+    e: goals.parts[goal],
+    goal: goal,
+  };
+  
+  { context: context, messages: [
+    { role: 'system', content: |||
+      %(character)s. %(job)s. %(task)s.
+    ||| % context }
+  ] + [
+    { role: 'user', content: |||
+      I will now provide: %(A)s.
+      
+      %(a)s
+      
+      I will now provide: %(B)s.
+      
+      %(b)s
+      
+      I will now provide: %(C)s.
+      
+      %(c)s
+      
+      I will now provide: %(D)s.
+      
+      %(d)s
+      
+      I will now provide: %(E)s.
+      
+      %(e)s
+      
+      Remember: %(character)s. %(job)s.
+      
+      Produce %(F)s and %(G)s.
+    ||| % context }
+  ] }
+  
+  for group in grouper(3, [''] + std.extVar('inputs') + ['', ''])
+  for goal in std.objectFields(goals.parts)
+] }
+
+##execute
+
+local fetch(request) =
+  std.native('fetch')(std.manifestJsonMinified(request));
+
+{ responses: [
+  fetch(request)
+  for request in std.extVar('requests')
+] }
+
+##decode
+
+local requests = std.extVar('requests');
+local responses = std.extVar('responses');
+
+local each(request, response) =
+  local text = request.context.c;
+  local goal = request.context.e;
+  local ratings = re_find_all('[0-9]+/10', response.choices[0].message.content);
+#   local rating = ratings[std.length(ratings)-1];
+  { text: text, goal: goal, rating: std.join(", ", ratings) };
+
+{ outputs: zip(each, requests, responses) }
+
+##postprocess
+
+local output =
+  local outputs = std.extVar('outputs');
+  local each(entry) =
+    local text = entry.key;
+    local outputs = entry.value;
+    std.join("\n", [
+      text,
+    ] + [
+      "%(goal)s\n%(rating)s" % output
+      for output in outputs
+    ]);
+  local keyfunc(x) = x.text;
+  [
+    each(entry)
+    for entry in std.objectKeysValues(groupBy(keyfunc, outputs))
+  ];
+
+{ output: std.join("\n\n", output) }
