@@ -1,0 +1,74 @@
+## Summarize Paragraphs
+
+({
+  local std = LLMerick.std,
+ 
+  input: LLMerick.input,
+  
+  context: {
+    Character: "You are a helpful assistant designed to aid a PhD student with writing their dissertation",
+    Job: "Your job is to summarize every paragraph into a single sentence. It is helpful to know that you will be operating on \"fragments\" of text, which are short selections of text from the dissertation. You only need to summarize the current fragment, but you will also have access to the previous and next fragments. You should only summarize the current fragment",
+    A: "A) The previous fragment",
+    B: "B) The current fragment",
+    C: "C) The next fragment",
+    D: "D) The one sentence summary of (%(B)s" % self,
+  },
+  
+  request(group):: {
+    local request = self,
+    context: $.context + {
+      a: group[0],
+      b: group[1],
+      c: group[2],
+    },
+    message(role, content):: {
+      role: role,
+      content: std.stripChars(content % request.context, " \n\t"),
+    },
+    messages: [
+      request.message('system', |||
+        %(Character)s. %(Job)s.
+
+        You will be given: %(A)s, %(B)s, and %(C)s. You will produce %(D)s.
+      ||| ),
+      request.message('user', |||
+        I will now provide you with %(A)s.
+
+        %(a)s
+
+        I will now provide you with %(B)s.
+
+        %(b)s
+
+        I will now provide you with %(C)s.
+
+        %(c)s
+      ||| ),
+      request.message('user', |||
+        Remember %(Job)s.
+
+        You will now produce %(D)s.
+      ||| ),
+    ],
+  },
+  
+  requests:: [
+    $.request(group)
+    for group in std.grouper(3, [''] + std.split($.input, "\n\n") + [''])
+  ],
+  
+  responses:: [
+    LLMerick.fetch(request)
+    for request in $.requests
+  ],
+  
+  outputs:: [
+    response.choices[0].message.content
+    for response in $.responses
+  ],
+  
+  output:: std.join("\n\n", $.outputs),
+} + { input: LLMerick.input }).output
+
+##/Summarize Paragraphs
+

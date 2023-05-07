@@ -1,0 +1,25 @@
+local LLMerick = {
+  std:: std + {
+    grouper(n, arr)::
+      local each(i) =
+        local each(j) =
+          arr[i+j];
+        std.makeArray(n, each);
+      std.makeArray(std.length(arr) - n + 1, each),
+  },
+
+  input::
+    std.extVar('_llmerick_input'),
+  
+  fetch(request)::
+    local encode = std.extVar('_llmerick_fetch_encode');
+    local native = std.native('_llmerick_fetch');
+    local decode = std.extVar('_llmerick_fetch_decode');
+    decode(native(encode(request))),
+  
+  split(document, new_tokens, old_tokens=0)::
+    local encode = std.extVar('_llmerick_split_encode');
+    local native = std.native('_llmerick_split');
+    local decode = std.extVar('_llmerick_split_decode');
+    decode(native(encode(document, new_tokens, old_tokens))),
+};
